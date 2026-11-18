@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReDoS Guard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1b1f24; --muted: #5c6670; --line: #dde1e6;
+    --accent: #1f5fbf; --bad: #c0392b; --good: #1e8449; --warn: #b9770e;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171a; --card: #1d2125; --ink: #e8eaed; --muted: #9aa4ae; --line: #2f353b;
+            --accent: #6ea8ff; --bad: #ff7b6b; --good: #4cd08a; --warn: #f0b04a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=number] {
+    font: 15px var(--mono); padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); min-width: 0; }
+  #regex { flex: 1 1 300px; }
+  button { font: inherit; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  .chip { font: 13px var(--mono); padding: 4px 9px; border-radius: 999px; }
+  .examples { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .examples span { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 600;
+           font-size: 14px; }
+  .badge.vulnerable { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .badge.safe { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+  .badge.suspicious { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .err { color: var(--bad); }
+  code, pre, .mono { font-family: var(--mono); }
+  .attack { font: 14px var(--mono); word-break: break-all; padding: 10px; background: var(--bg);
+            border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+  .attack .pump { color: var(--bad); font-weight: 600; }
+  .attack .suffix { color: var(--warn); font-weight: 600; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #diagram { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+             padding: 8px; min-height: 80px; }
+  #diagram svg { max-width: 100%; height: auto; }
+  pre.dot { margin: 0; white-space: pre-wrap; font-size: 12px; color: #1b1f24; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  svg text { fill: var(--ink); font: 12px system-ui, sans-serif; }
+  .legend { display: flex; gap: 14px; font-size: 13px; margin-top: 6px; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; }
+  .result { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+            font: 13px var(--mono); white-space: pre-wrap; }
+  label { font-size: 13px; color: var(--muted); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ReDoS Guard</h1>
+  <p class="sub">Finds regular expressions that can freeze a backtracking engine, builds an attack string, and shows the DFA that fixes it.</p>
+
+  <section class="card">
+    <div class="row">
+      <input type="text" id="regex" value="(a+)+" spellcheck="false" autocomplete="off" aria-label="Regular expression">
+      <button class="primary" id="go">Analyze</button>
+    </div>
+    <div class="examples" id="examples"><span>Try:</span></div>
+    <div id="error" class="err" style="margin-top:8px"></div>
+  </section>
+
+  <div id="results" class="hidden">
+    <section class="card">
+      <div class="row"><span id="verdict" class="badge"></span><span id="reason" class="muted"></span></div>
+      <div class="stats" id="stats"></div>
+    </section>
+
+    <section class="card" id="attackCard">
+      <h2>Attack string</h2>
+      <div class="muted" id="attackNote"></div>
+      <div class="attack" id="attackStr"></div>
+      <div class="row">
+        <label for="reps">Pump repeats</label>
+        <input type="number" id="reps" min="1" max="60" value="25" style="width:80px">
+        <button id="copy">Copy</button>
+      </div>
+    </section>
+
+    <section class="card" id="chartCard">
+      <h2>Matching work vs input length</h2>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--bad)"></i>Backtracking engine</span>
+        <span><i style="background:var(--good)"></i>Minimized DFA</span>
+      </div>
+      <div style="overflow:auto;margin-top:10px"><table id="bench"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>State diagrams</h2>
+      <div class="tabs">
+        <button id="tabNfa" class="on">NFA (ambiguous state in red)</button>
+        <button id="tabDfa">Minimized DFA</button>
+      </div>
+      <div id="diagram"></div>
+    </section>
+
+    <section class="card">
+      <h2>ESP32 demo</h2>
+      <p class="muted" style="margin-top:0">Run the attack on the board with the backtracking matcher, then with the DFA table. Leave the address on <code>mock</code> to use the software stand-in.</p>
+      <div class="row">
+        <label for="device">Device</label>
+        <input type="text" id="device" value="mock" style="width:200px" aria-label="Device address">
+        <button id="sendBt">Send attack: backtracking</button>
+        <button id="sendDfa">Send attack: DFA</button>
+        <a id="headerLink" href="#" download="redos_tables.h">Download redos_tables.h</a>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:13px">Board IP like <code>192.168.1.50</code>. The board must be on the same network as this browser.</div>
+      <div class="result hidden" id="deviceOut"></div>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@viz-js/viz@3.2.4/lib/viz-standalone.js" async></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const EXAMPLES = [
+  ["(a+)+", "bad"], ["(a|aa)+", "bad"], ["(.*a){3,}", "bad"],
+  ["^(([a-z])+.)+[A-Z]([a-z])+$", "bad"], ["(\\w+\\s?)*", "bad"],
+  ["[a-z]+@[a-z]+\\.com", "ok"], ["\\d+(\\.\\d+)?", "ok"], ["(a|b)*abb", "ok"],
+];
+let data = null, tab = "nfa";
+
+for (const [rx, kind] of EXAMPLES) {
+  const b = document.createElement("button");
+  b.className = "chip"; b.textContent = rx; b.title = kind === "bad" ? "vulnerable" : "safe";
+  b.onclick = () => { $("regex").value = rx; analyze(); };
+  $("examples").appendChild(b);
+}
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+async function analyze() {
+  const regex = $("regex").value;
+  $("error").textContent = "";
+  $("go").disabled = true; $("go").textContent = "Analyzing...";
+  try {
+    const r = await fetch("/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ regex }) });
+    const body = await r.json();
+    if (!r.ok) {
+      const d = body.detail;
+      const msg = d && d.error ? d.error + (d.position != null ? " (at position " + d.position + ")" : "")
+                               : JSON.stringify(body.detail);
+      $("error").textContent = "Cannot analyze: " + msg;
+      return;
+    }
+    data = body; render();
+  } catch (e) {
+    $("error").textContent = "Request failed: " + e.message;
+  } finally {
+    $("go").disabled = false; $("go").textContent = "Analyze";
+  }
+}
+
+function stat(value, label) { return el("div", { class: "stat" }, el("b", {}, String(value)), el("span", {}, label)); }
+
+function render() {
+  $("results").classList.remove("hidden");
+  $("verdict").className = "badge " + data.verdict;
+  $("verdict").textContent = data.verdict.toUpperCase();
+  $("reason").textContent = data.reason;
+  const st = $("stats"); st.replaceChildren(
+    stat(data.nfa.thompson_states, "Thompson NFA states"),
+    stat(data.nfa.states, "NFA states after cleanup"),
+    stat(data.dfa.states ?? "n/a", "DFA states"),
+    stat(data.dfa.min_states ?? "n/a", "Minimized DFA states"),
+  );
+  if (data.dfa.error) $("error").textContent = "DFA: " + data.dfa.error;
+
+  const hasAttack = !!data.attack;
+  $("attackCard").classList.toggle("hidden", !hasAttack);
+  $("chartCard").classList.toggle("hidden", !hasAttack || !data.benchmark.length);
+  if (hasAttack) { renderAttack(); renderChart(); renderTable(); }
+  $("headerLink").href = "/export/header?regex=" + encodeURIComponent(data.regex);
+  $("deviceOut").classList.add("hidden");
+  $("sendBt").disabled = $("sendDfa").disabled = !hasAttack;
+  drawDiagram();
+}
+
+function attackString() {
+  const a = data.attack, n = Math.max(1, Math.min(60, parseInt($("reps").value, 10) || 25));
+  return a.prefix + a.pump.repeat(n) + a.suffix;
+}
+
+function renderAttack() {
+  const a = data.attack, n = Math.max(1, Math.min(60, parseInt($("reps").value, 10) || 25));
+  $("attackNote").textContent = "prefix + pump x " + n + " + suffix (the suffix makes the match fail, so the engine tries every way to split the pump)";
+  const box = $("attackStr"); box.replaceChildren(
+    document.createTextNode(a.prefix),
+    el("span", { class: "pump" }, a.pump.repeat(n)),
+    el("span", { class: "suffix" }, a.suffix));
+}
+
+function renderTable() {
+  const t = $("bench");
+  const head = el("tr", {}, ...["Length", "Backtracking steps", "Backtracking ms", "DFA steps", "DFA ms"].map(h => el("th", {}, h)));
+  const rows = data.benchmark.map(r => el("tr", {},
+    el("td", {}, String(r.length)),
+    el("td", {}, (r.backtrack_capped ? ">= " : "") + r.backtrack_steps.toLocaleString()),
+    el("td", {}, (r.backtrack_capped ? ">= " : "") + r.backtrack_ms),
+    el("td", {}, r.dfa_steps == null ? "n/a" : String(r.dfa_steps)),
+    el("td", {}, r.dfa_ms == null ? "n/a" : String(r.dfa_ms))));
+  t.replaceChildren(head, ...rows);
+}
+
+function renderChart() {
+  const rows = data.benchmark, W = 720, H = 300, L = 62, R = 14, T = 12, B = 40;
+  const xs = rows.map(r => r.length);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const all = rows.flatMap(r => [r.backtrack_steps, r.dfa_steps || 1]);
+  const ymax = Math.max(...all), top = Math.ceil(Math.log10(ymax));
+  const X = (v) => L + (xmax === xmin ? 0 : (v - xmin) / (xmax - xmin)) * (W - L - R);
+  const Y = (v) => T + (1 - Math.log10(Math.max(1, v)) / top) * (H - T - B);
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Log-scale chart of matching steps against input length");
+  const add = (tag, attrs, text) => { const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text;
+    svg.appendChild(e); return e; };
+  for (let p = 0; p <= top; p++) {
+    add("line", { x1: L, x2: W - R, y1: Y(10 ** p), y2: Y(10 ** p), stroke: "var(--line)" });
+    add("text", { x: L - 8, y: Y(10 ** p) + 4, "text-anchor": "end" }, "10^" + p);
+  }
+  for (const v of xs.filter((_, i) => i % Math.ceil(xs.length / 8) === 0))
+    add("text", { x: X(v), y: H - B + 18, "text-anchor": "middle" }, String(v));
+  add("text", { x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle" }, "input length (characters)");
+  add("text", { x: 14, y: (T + H - B) / 2, "text-anchor": "middle", transform: `rotate(-90 14 ${(T + H - B) / 2})` }, "steps (log scale)");
+  const line = (key, color) => {
+    const pts = rows.filter(r => r[key] != null).map(r => X(r.length) + "," + Y(r[key]));
+    add("polyline", { points: pts.join(" "), fill: "none", stroke: color, "stroke-width": 2.5 });
+    rows.filter(r => r[key] != null).forEach(r => add("circle", { cx: X(r.length), cy: Y(r[key]), r: 3.5, fill: color }));
+  };
+  line("dfa_steps", "var(--good)"); line("backtrack_steps", "var(--bad)");
+  const last = rows[rows.length - 1];
+  if (last.backtrack_capped)
+    add("text", { x: X(last.length) - 6, y: Y(last.backtrack_steps) - 10, "text-anchor": "end" }, "stopped at the step limit");
+  $("chart").replaceChildren(svg);
+}
+
+async function drawDiagram() {
+  const dot = tab === "nfa" ? data.dot : data.dfa.dot;
+  const box = $("diagram");
+  if (!dot) { box.textContent = "No diagram available."; return; }
+  try {
+    if (!window.Viz) throw new Error("renderer not loaded");
+    const viz = await Viz.instance();
+    box.replaceChildren(viz.renderSVGElement(dot));
+  } catch (e) {
+    const pre = el("pre", { class: "dot" }, dot);
+    box.replaceChildren(el("div", { class: "muted" }, "Diagram renderer unavailable (needs internet). Graphviz source:"), pre);
+  }
+}
+
+$("tabNfa").onclick = () => { tab = "nfa"; $("tabNfa").classList.add("on"); $("tabDfa").classList.remove("on"); if (data) drawDiagram(); };
+$("tabDfa").onclick = () => { tab = "dfa"; $("tabDfa").classList.add("on"); $("tabNfa").classList.remove("on"); if (data) drawDiagram(); };
+$("reps").oninput = () => { if (data && data.attack) renderAttack(); };
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(attackString()); $("copy").textContent = "Copied"; }
+  catch (e) { $("copy").textContent = "Copy failed"; }
+  setTimeout(() => $("copy").textContent = "Copy", 1200);
+};
+$("regex").addEventListener("keydown", (e) => { if (e.key === "Enter") analyze(); });
+$("go").onclick = analyze;
+
+async function sendToDevice(mode) {
+  const dev = $("device").value.trim() || "mock";
+  const s = attackString(), out = $("deviceOut");
+  out.classList.remove("hidden"); out.textContent = "Sending " + s.length + " characters (" + mode + ")...";
+  const url = dev === "mock"
+    ? "/mock/match?regex=" + encodeURIComponent(data.regex) + "&mode=" + mode + "&s=" + encodeURIComponent(s)
+    : "http://" + dev.replace(/^https?:\/\//, "") + "/match?mode=" + mode + "&s=" + encodeURIComponent(s);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 7000), t0 = performance.now();
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    const j = await r.json();
+    if (j.reset) out.textContent = "No answer: the board hung on this input and the watchdog reset it.\n" +
+      (j.note || "") + "\nsteps before giving up: " + j.steps.toLocaleString();
+    else if (!r.ok) out.textContent = "Device error: " + JSON.stringify(j);
+    else out.textContent = "mode: " + j.mode + "\nmatched: " + j.matched + "\nsteps: " + j.steps.toLocaleString() +
+      "\ntime: " + (j.micros != null ? j.micros + " microseconds" : "n/a") + (j.capped ? "\n(stopped at the step cap)" : "");
+  } catch (e) {
+    const ms = Math.round(performance.now() - t0);
+    out.textContent = e.name === "AbortError"
+      ? "No answer after " + ms + " ms. In backtracking mode this is the expected freeze; the watchdog should reset the board."
+      : "Could not reach the device: " + e.message + ". Check the IP address and that the board is on the same network.";
+  } finally { clearTimeout(timer); }
+}
+$("sendBt").onclick = () => sendToDevice("bt");
+$("sendDfa").onclick = () => sendToDevice("dfa");
+
+analyze();
+</script>
+</body>
+</html>
